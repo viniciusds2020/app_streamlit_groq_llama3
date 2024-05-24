@@ -6,4 +6,4 @@ streamlit
 streamlit_chat
 sentence-transformers
 faiss-cpu
-tempfile
+temp
