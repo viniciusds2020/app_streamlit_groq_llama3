@@ -1,0 +1,9 @@
+langchain
+langchain_community
+langchain-groq 
+pypdf
+streamlit
+streamlit_chat
+sentence-transformers
+faiss-cpu
+tempfile
