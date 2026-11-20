@@ -1,99 +1,43 @@
-# Aplicativo Streamlit - Llama3 70B - Groq
+# Assistente RAG de PDFs com Streamlit, FAISS e Groq
 
-Bem-vindo ao repositório do **Aplicativo Streamlit - Llama3 70B - Groq**. Este repositório contém o código-fonte e a documentação para o aplicativo desenvolvido utilizando o framework Streamlit, o modelo de linguagem Llama3 70B e aceleradores Groq.
+Aplicação para carregar um PDF e conversar com seu conteúdo. A busca utiliza embeddings Sentence Transformers e FAISS; a geração usa um modelo disponível na Groq.
 
-## Índice
+## Executar
 
-- [Visão Geral](#visão-geral)
-- [Funcionalidades](#funcionalidades)
-- [Requisitos](#requisitos)
-- [Instalação](#instalação)
-- [Uso](#uso)
-- [Contribuição](#contribuição)
-- [Licença](#licença)
-- [Contato](#contato)
-
-## Visão Geral
-
-O **Aplicativo Streamlit - Llama3 70B - Groq** é uma aplicação de processamento de linguagem natural (PLN) que aproveita a capacidade do modelo Llama3 70B para fornecer respostas inteligentes e coerentes a perguntas e comandos. Utilizando a plataforma Streamlit, a interface do usuário é simples e intuitiva, facilitando a interação com o modelo. A performance é otimizada por meio do uso dos aceleradores Groq.
-
-## Funcionalidades
-
-- **Interação em tempo real**: Faça perguntas e obtenha respostas instantaneamente.
-- **Interface amigável**: A interface do Streamlit é fácil de usar e visualmente atraente.
-- **Desempenho otimizado**: Utilização de aceleradores Groq para maximizar a eficiência e a velocidade do processamento.
-
-## Requisitos
-
-Antes de instalar e executar o aplicativo, verifique se o seu sistema atende aos seguintes requisitos:
-
-- Python 3.8 ou superior
-- Streamlit
-- Acesso ao modelo Llama3 70B
-- Aceleradores Groq (opcional, mas recomendado para melhor desempenho)
-
-## Instalação
-
-Para instalar e configurar o aplicativo, siga os passos abaixo:
-
-1. **Clone este repositório:**
-    ```bash
-    git clone https://github.com/seu-usuario/aplicativo-streamlit-llama3-70b-groq.git
-    cd aplicativo-streamlit-llama3-70b-groq
-    ```
-
-2. **Crie um ambiente virtual (opcional, mas recomendado):**
-    ```bash
-    python -m venv venv
-    source venv/bin/activate  # No Windows use `venv\Scripts\activate`
-    ```
-
-3. **Instale as dependências:**
-    ```bash
-    pip install -r requirements.txt
-    ```
-
-## Uso
-
-Para iniciar o aplicativo, execute o seguinte comando no terminal:
+Recomendado: Python 3.10 ou 3.11.
 
 ```bash
+git clone https://github.com/viniciusds2020/app_streamlit_groq_llama3.git
+cd app_streamlit_groq_llama3
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+export GROQ_API_KEY="sua_chave_nova"
+export GROQ_MODEL="nome_de_um_modelo_disponivel_na_sua_conta"
 streamlit run app.py
 ```
 
-Isso abrirá o aplicativo no seu navegador padrão. Você pode começar a interagir com o modelo Llama3 70B através da interface fornecida.
+No Windows, configure as variáveis de ambiente com os comandos correspondentes ao terminal. Não envie credenciais ao GitHub.
 
-## Contribuição
+## Arquitetura
 
-Contribuições são bem-vindas! Se você deseja contribuir com este projeto, por favor, siga os passos abaixo:
+- `app.py`: interface e fluxo de perguntas
+- `config.py`: validação da configuração externa
+- `chat_state.py`: histórico e troca de documento por sessão
+- `ingestion.py`: leitura de PDF e limpeza do arquivo temporário
+- `retrieval.py`: embeddings e índice FAISS em memória
+- `llm.py`: cliente Groq
 
-1. **Fork o repositório**
-2. **Crie uma nova branch:**
-    ```bash
-    git checkout -b minha-nova-funcionalidade
-    ```
-3. **Faça suas alterações e commit:**
-    ```bash
-    git commit -m 'Adicionar nova funcionalidade'
-    ```
-4. **Envie para o repositório remoto:**
-    ```bash
-    git push origin minha-nova-funcionalidade
-    ```
-5. **Abra um Pull Request**
+A aplicação mostra páginas recuperadas, que não devem ser confundidas com citações verificadas de cada afirmação. PDFs digitalizados sem camada de texto exigem OCR, ainda fora do escopo.
 
-## Licença
+## Testes
 
-Este projeto está licenciado sob a licença MIT. Veja o arquivo [LICENSE](LICENSE) para mais detalhes.
+```bash
+pytest -q
+```
 
-## Contato
+A instalação e o teste ponta a ponta devem ser verificados em ambiente limpo. A credencial antiga foi exposta em histórico público; revogá-la é necessário, mas removê-la do código atual não elimina os commits antigos.
 
-Se você tiver alguma dúvida, sugestão ou feedback, entre em contato:
+## Especificações
 
-- Nome: Vinicius de Sousa
-- Email: viniciusds1020@gmail.com
-- GitHub: [Vinicius](https://github.com/viniciusds2020)
-
----
-
-Agradecemos por usar o **Aplicativo Streamlit - Llama3 70B - Groq**! Esperamos que você aproveite a experiência e encontre o aplicativo útil para suas necessidades de processamento de linguagem natural.
+Consulte `openspec/changes/secure-and-refactor-rag/`.
