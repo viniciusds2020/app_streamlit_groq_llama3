@@ -1,0 +1,28 @@
+name: RAG integration checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - refactor/secure-rag-openspec
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install project dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Check import compatibility
+        run: |
+          python -c "from langchain.chains import ConversationalRetrievalChain"
+          python -c "from langchain_community.document_loaders import PyPDFLoader"
+          python -c "from langchain_community.vectorstores import FAISS"
+          python -c "from langchain_groq import ChatGroq"
+      - name: Run unit and mocked integration tests
+        run: python -m pytest -q
