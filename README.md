@@ -1,6 +1,6 @@
 # Assistente RAG de PDFs com Streamlit, FAISS e Groq
 
-Aplicação para carregar um PDF e conversar com seu conteúdo. A busca utiliza embeddings Sentence Transformers e FAISS; a geração usa um modelo disponível na Groq.
+Aplicação para carregar um PDF e conversar com seu conteúdo. A busca utiliza embeddings multilíngues via fastembed e FAISS; a geração usa um modelo disponível na Groq.
 
 ## Executar
 
