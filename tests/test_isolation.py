@@ -1,7 +1,12 @@
 import importlib
+import io
 import sys
 import types
-from unittest.mock import MagicMock
+from pathlib import Path
+
+import pytest
+from pypdf import PdfWriter
+
 
 def test_document_switch_clears_index(monkeypatch):
     fake_streamlit = types.ModuleType("streamlit")
@@ -20,25 +25,32 @@ def test_document_switch_clears_index(monkeypatch):
     assert "vector_store" not in fake_streamlit.session_state
     assert "indexed_document" not in fake_streamlit.session_state
 
+
 def test_pdf_temp_file_removed_after_loader_failure(monkeypatch):
-    loader_module = types.ModuleType("langchain_community.document_loaders")
+    # Patch the imported class, not sys.modules, to prevent order-dependent tests.
+    import ingestion
+
     observed = {}
+
     class BrokenLoader:
         def __init__(self, path):
             observed["path"] = path
+
         def load_and_split(self):
-            raise ValueError("invalid pdf")
-    loader_module.PyPDFLoader = BrokenLoader
-    package = types.ModuleType("langchain_community")
-    package.__path__ = []
-    monkeypatch.setitem(sys.modules, "langchain_community", package)
-    monkeypatch.setitem(sys.modules, "langchain_community.document_loaders", loader_module)
-    sys.modules.pop("ingestion", None)
-    ingestion = importlib.import_module("ingestion")
-    upload = MagicMock()
-    upload.getvalue.return_value = b"not-a-pdf"
-    import pytest
-    with pytest.raises(ValueError, match="invalid pdf"):
-        ingestion.load_pdf(upload)
-    from pathlib import Path
+            raise ValueError("sensitive parser detail")
+
+    monkeypatch.setattr(ingestion, "PyPDFLoader", BrokenLoader)
+
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=200)
+    stream = io.BytesIO()
+    writer.write(stream)
+
+    class Upload:
+        def getvalue(self):
+            return stream.getvalue()
+
+    with pytest.raises(ingestion.PDFValidationError, match="Não foi possível extrair"):
+        ingestion.load_pdf(Upload())
+    assert observed, "the valid PDF should reach the loader"
     assert not Path(observed["path"]).exists()
