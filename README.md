@@ -41,3 +41,29 @@ A instalação e o teste ponta a ponta devem ser verificados em ambiente limpo. 
 ## Especificações
 
 Consulte `openspec/changes/secure-and-refactor-rag/`.
+
+
+## Limites e segurança do upload (OpenSpec P0)
+
+O processamento aplica validação de bytes e estrutura do PDF, rejeita PDFs protegidos
+por senha, limita páginas e caracteres extraídos e exclui o arquivo temporário ao
+terminar ou falhar. São limites operacionais configuráveis por variáveis de ambiente:
+
+| Variável | Padrão | Efeito |
+| --- | ---: | --- |
+| `RAG_MAX_PDF_BYTES` | `10485760` (10 MiB) | Rejeita uploads acima do limite antes de analisar o PDF |
+| `RAG_MAX_PDF_PAGES` | `100` | Rejeita documentos com mais páginas |
+| `RAG_MAX_EXTRACTED_CHARS` | `1000000` | Rejeita texto excessivo antes de indexar |
+
+O Streamlit mantém seu próprio limite de upload, que deve ser alinhado à
+configuração do aplicativo. **Essas verificações não são um sandbox de PDF:**
+em produção, configure limites de CPU, memória e tempo no processo/contêiner,
+além de autenticação, autorização e políticas de retenção adequadas.
+
+Exceções inesperadas são apresentadas ao usuário sem detalhes internos; logs
+registram apenas tipo da exceção e identificador de incidente, sem traceback,
+chave Groq, prompt ou conteúdo dos documentos. O comportamento de referência
+por página ainda não garante fidelidade de cada afirmação do modelo.
+
+Testes de segurança: `pytest -q tests/test_pdf_security.py`.
+Critérios e demais tarefas: `openspec/changes/harden-and-validate-rag/`.
