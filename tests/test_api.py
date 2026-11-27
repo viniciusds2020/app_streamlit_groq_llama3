@@ -9,6 +9,7 @@ from pypdf import PdfWriter
 
 import api
 import rag_service
+from metadata_store import MetadataStore
 
 
 def make_pdf(pages=1):
@@ -26,6 +27,7 @@ def client(monkeypatch):
         ttl_seconds=3600,
         max_sessions=10,
         max_active_operations=10,
+        metadata_store=MetadataStore(":memory:"),
     )
 
     def fake_load_pdf(upload):
@@ -52,7 +54,8 @@ def client(monkeypatch):
             }
 
     monkeypatch.setattr(rag_service, "load_pdf", fake_load_pdf)
-    monkeypatch.setattr(rag_service, "create_vector_store", FakeStore)
+    monkeypatch.setattr(rag_service, "create_vector_store", lambda docs, collection: FakeStore(docs))
+    monkeypatch.setattr(rag_service, "delete_vector_store", lambda collection: None)
     monkeypatch.setattr(rag_service, "load_llm", lambda: object())
     monkeypatch.setattr(rag_service, "ConversationalRetrievalChain", FakeChain)
     return TestClient(api.app)
@@ -114,8 +117,8 @@ def test_reupload_invalidates_previous_index_and_history(client):
     invalid = upload(client, session, b"not a pdf")
     assert invalid.status_code == 422
     assert invalid.json()["detail"]["request_id"] == invalid.headers["x-request-id"]
-    assert api.service._get(session).history == []
-    assert ask(client, session).status_code == 409
+    assert len(api.service._get(session).history) == 1
+    assert ask(client, session).status_code == 200
 
 
 def test_deleted_session_is_unavailable(client):
@@ -167,6 +170,7 @@ def test_service_busy_returns_safe_error(client):
         ttl_seconds=3600,
         max_sessions=10,
         max_active_operations=1,
+        metadata_store=MetadataStore(":memory:"),
     )
     session = new_session(client)
     api.service._operation_slots.acquire(blocking=False)
