@@ -16,22 +16,27 @@ export GROQ_MODEL="modelo-disponivel-na-sua-conta"
 
 Em Windows PowerShell: `.venv\Scripts\Activate.ps1`; configure `$env:GROQ_API_KEY`, `$env:GROQ_MODEL` e, se usar Qdrant remoto, `$env:QDRANT_URL` e `$env:QDRANT_API_KEY`.
 
-Langfuse é opcional. Sem as duas chaves, o RAG não cria traces e continua funcionando:
+Langfuse é opcional. Sem as duas chaves, o RAG não cria traces e continua funcionando.
 
-```bash
-export LANGFUSE_PUBLIC_KEY="pk-lf-..."
-export LANGFUSE_SECRET_KEY="sk-lf-..."
-# Opcional para uma instalação self-hosted:
-export LANGFUSE_BASE_URL="https://seu-langfuse"
-```
+### Langfuse self-hosted local
 
-Antes de iniciar o app, valide a conexão e envie um trace de teste sem conteúdo de usuário:
+No Windows, use Docker Desktop com WSL 2 e rode estes passos em WSL ou Git Bash. O procedimento oficial mantém o Langfuse em outro diretório/repositório, separado deste app:
 
-```bash
+1. Siga o [guia oficial de Docker Compose](https://langfuse.com/self-hosting/deployment/docker-compose) para clonar o repositório Langfuse e gerar o arquivo local `.env` com segredos aleatórios. Não reutilize segredos de exemplo.
+2. Na pasta do clone do Langfuse, inicie a stack com `docker compose up -d`. Aguarde o health check responder e abra `http://localhost:3000`.
+3. Crie o primeiro usuário, uma organização e um projeto na interface. Copie as chaves públicas e secretas do projeto. Não as envie no chat nem as adicione ao Git.
+4. No PowerShell do app, configure as variáveis na sessão local:
+
+```powershell
+$env:LANGFUSE_PUBLIC_KEY="pk-lf-..."
+$env:LANGFUSE_SECRET_KEY="sk-lf-..."
+$env:LANGFUSE_BASE_URL="http://localhost:3000"
 python scripts/langfuse_smoke.py
 ```
 
-No PowerShell, defina as mesmas variáveis com `$env:LANGFUSE_PUBLIC_KEY`, `$env:LANGFUSE_SECRET_KEY` e, se necessário, `$env:LANGFUSE_BASE_URL`; depois rode o script. Ele confirma autenticação e envia o span `rag.langfuse_smoke`, que deve aparecer no projeto Langfuse.
+O script valida autenticação e envia o span `rag.langfuse_smoke`, sem conteúdo do usuário. Confira o trace no projeto Langfuse antes de iniciar a API; mantenha a stack self-hosted acessível apenas localmente.
+
+Para parar o Langfuse sem apagar os dados, rode `docker compose down` no clone do Langfuse. Evite `docker compose down -v`: a opção `-v` remove os volumes persistentes. A documentação oficial recomenda Docker Compose para uso local/teste em máquina única; não oferece alta disponibilidade nem backup automatizado.
 
 A integração do RAG envia apenas metadados operacionais: ID da requisição, impressão digital do ID da sessão, tamanho da pergunta, duração, quantidade de páginas recuperadas e resultado. Texto da pergunta, resposta e conteúdo do PDF não são enviados por esse trace.
 
@@ -83,4 +88,4 @@ O CI usa um modelo simulado, Qdrant em memória e DuckDB temporário; não preci
 
 ## Limitações arquiteturais
 
-O backend é local, single-process, sem armazenamento persistente ou autenticação. O limite via `Content-Length` não substitui um limite de corpo no proxy/servidor, especialmente para uploads sem esse cabeçalho. Para escala, serão necessários mecanismos de identidade e autorização, limite de taxa e processamento isolado/assíncrono. O modo Qdrant local e o arquivo DuckDB não são criptografados automaticamente.
+O backend é local, single-process e sem autenticação/autorização de usuários; Qdrant e DuckDB persistem os dados localmente. O limite via `Content-Length` não substitui um limite de corpo no proxy/servidor, especialmente para uploads sem esse cabeçalho. Para escala, serão necessários mecanismos de identidade e autorização, limite de taxa e processamento isolado/assíncrono. O modo Qdrant local e o arquivo DuckDB não são criptografados automaticamente.
