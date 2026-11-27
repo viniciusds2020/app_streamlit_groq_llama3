@@ -1,14 +1,15 @@
-"""RAG orchestration and bounded, process-local sessions for the local MVP.
+"""RAG orchestration with DuckDB metadata and persistent Qdrant collections.
 
-Session identifiers act as bearer tokens. This in-memory store is NOT appropriate
-for a public-facing or multi-worker deployment without proper authentication,
-authorization, distributed storage, and rate limiting.
+Session identifiers act as bearer tokens. Tokens are hashed before persistence.
+This local MVP is not appropriate for public hosting without authentication,
+authorization, rate limits, and a multi-process storage design.
 """
 import hashlib
 import os
 import secrets
 import threading
 import time
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 
@@ -16,8 +17,14 @@ from langchain.chains import ConversationalRetrievalChain
 
 from ingestion import load_pdf
 from llm import load_llm
+from metadata_store import MetadataStore
 from observability import trace_span
-from retrieval import create_vector_store
+from retrieval import (
+    collection_name_for,
+    create_vector_store,
+    delete_vector_store,
+    load_vector_store,
+)
 
 
 class SessionNotFound(Exception):
@@ -34,17 +41,26 @@ class ServiceBusy(Exception):
 
 @dataclass
 class Session:
-    vector_store: object = None
+    session_key: str
     document_id: str = None
+    collection_name: str = None
+    vector_store: object = None
     history: list = field(default_factory=list)
-    touched: float = field(default_factory=time.monotonic)
+    touched: float = field(default_factory=time.time)
     lock: object = field(default_factory=threading.RLock)
 
 
 class RAGService:
-    """Single-worker, in-memory session store with idle expiry and capacity limits."""
+    """Single-process session cache backed by persistent DuckDB and Qdrant."""
 
-    def __init__(self, *, ttl_seconds=None, max_sessions=None, max_active_operations=None):
+    def __init__(
+        self,
+        *,
+        ttl_seconds=None,
+        max_sessions=None,
+        max_active_operations=None,
+        metadata_store=None,
+    ):
         self.ttl_seconds = ttl_seconds or int(os.getenv("RAG_SESSION_TTL_SECONDS", "3600"))
         self.max_sessions = max_sessions or int(os.getenv("RAG_MAX_SESSIONS", "100"))
         self.max_active_operations = max_active_operations or int(
@@ -55,6 +71,7 @@ class RAGService:
         self._sessions = {}
         self._lock = threading.RLock()
         self._operation_slots = threading.BoundedSemaphore(self.max_active_operations)
+        self._metadata = metadata_store or MetadataStore()
 
     @contextmanager
     def _operation_slot(self):
@@ -65,76 +82,113 @@ class RAGService:
         finally:
             self._operation_slots.release()
 
+    @staticmethod
+    def _session_key(token):
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
     def _expire(self):
-        now = time.monotonic()
-        for token, session in list(self._sessions.items()):
-            if now - session.touched >= self.ttl_seconds:
-                del self._sessions[token]
+        cutoff = time.time() - self.ttl_seconds
+        expired = self._metadata.delete_expired(cutoff)
+        for session_key, collection_name in expired:
+            self._sessions.pop(session_key, None)
+            delete_vector_store(collection_name)
 
     def create_session(self):
         with self._lock:
             self._expire()
-            if len(self._sessions) >= self.max_sessions:
+            if self._metadata.count_sessions() >= self.max_sessions:
                 raise RuntimeError("Session capacity reached")
             token = secrets.token_urlsafe(32)
-            self._sessions[token] = Session()
+            session_key = self._session_key(token)
+            self._metadata.create_session(session_key)
+            self._sessions[session_key] = Session(session_key=session_key)
             return token
 
     def _get(self, token):
+        session_key = self._session_key(token)
         with self._lock:
             self._expire()
-            session = self._sessions.get(token)
+            session = self._sessions.get(session_key)
             if session is None:
-                raise SessionNotFound()
-            session.touched = time.monotonic()
+                stored = self._metadata.get_session(session_key)
+                if stored is None:
+                    raise SessionNotFound()
+                session = Session(
+                    session_key=session_key,
+                    document_id=stored["document_id"],
+                    collection_name=stored["collection_name"],
+                    history=[tuple(item) for item in stored["history"]],
+                    touched=stored["touched"],
+                )
+                self._sessions[session_key] = session
+            session.touched = time.time()
+            self._metadata.touch(session_key, session.touched)
             return session
 
     def reset(self, token):
+        session_key = self._session_key(token)
         with self._lock:
             self._expire()
-            if token not in self._sessions:
+            stored = self._metadata.get_session(session_key)
+            if stored is None:
                 raise SessionNotFound()
-            del self._sessions[token]
+            collection_name = stored["collection_name"]
+            self._metadata.delete_session(session_key)
+            self._sessions.pop(session_key, None)
+            delete_vector_store(collection_name)
 
     def upload(self, token, data):
-        """Validate, extract, index, and replace a session's document."""
         session = self._get(token)
         with self._operation_slot():
             with session.lock:
-                # New upload invalidates the previous document and chat history.
-                session.vector_store = None
-                session.document_id = None
-                session.history.clear()
                 from ingestion import validate_pdf_bytes
 
                 validated = validate_pdf_bytes(data)
+                docs = load_pdf(_UploadedBytes(validated))
+                document_id = hashlib.sha256(validated).hexdigest()
+                index_id = uuid.uuid4().hex
+                collection_name = collection_name_for(session.session_key, index_id)
 
-                class UploadedBytes:
-                    def getvalue(self):
-                        return validated
+                # Build a new collection first. The old one stays available until
+                # the new index and its metadata are committed successfully.
+                store = create_vector_store(docs, collection_name)
+                old_collection = session.collection_name
+                try:
+                    self._metadata.replace_document(
+                        session.session_key,
+                        document_id,
+                        collection_name,
+                    )
+                except Exception:
+                    delete_vector_store(collection_name)
+                    raise
 
-                docs = load_pdf(UploadedBytes())
-                store = create_vector_store(docs)
+                session.document_id = document_id
+                session.collection_name = collection_name
                 session.vector_store = store
-                session.document_id = hashlib.sha256(validated).hexdigest()
-                return session.document_id
+                session.history.clear()
+                session.touched = time.time()
+                if old_collection and old_collection != collection_name:
+                    delete_vector_store(old_collection)
+                return document_id
 
     def ask(self, token, question, *, request_id=None):
         session = self._get(token)
         with self._operation_slot():
             with session.lock:
-                if session.vector_store is None:
+                if not session.collection_name:
                     raise DocumentNotIndexed()
+                store = session.vector_store or load_vector_store(session.collection_name)
                 trace_metadata = {
                     "request_id": request_id,
-                    "session_fingerprint": hashlib.sha256(token.encode("utf-8")).hexdigest()[:16],
+                    "session_fingerprint": session.session_key[:16],
                     "question_length": len(question),
                 }
                 started = time.monotonic()
                 with trace_span("rag.answer", metadata=trace_metadata) as span:
                     chain = ConversationalRetrievalChain.from_llm(
                         llm=load_llm(),
-                        retriever=session.vector_store.as_retriever(),
+                        retriever=store.as_retriever(),
                         return_source_documents=True,
                     )
                     result = chain.invoke({
@@ -154,9 +208,19 @@ class RAGService:
                             "outcome": "success",
                         })
                 session.history.append((question, answer))
+                session.touched = time.time()
+                self._metadata.save_history(session.session_key, session.history)
                 return {
                     "answer": answer,
                     "pages": pages,
                     "document_id": session.document_id,
                     "request_id": request_id,
                 }
+
+
+class _UploadedBytes:
+    def __init__(self, data):
+        self._data = data
+
+    def getvalue(self):
+        return self._data
