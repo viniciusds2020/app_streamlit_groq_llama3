@@ -25,7 +25,15 @@ export LANGFUSE_SECRET_KEY="sk-lf-..."
 export LANGFUSE_BASE_URL="https://seu-langfuse"
 ```
 
-A integração envia apenas metadados operacionais: ID da requisição, impressão digital do ID da sessão, tamanho da pergunta, duração, quantidade de páginas recuperadas e resultado. Texto da pergunta, resposta e conteúdo do PDF não são enviados por este trace.
+Antes de iniciar o app, valide a conexão e envie um trace de teste sem conteúdo de usuário:
+
+```bash
+python scripts/langfuse_smoke.py
+```
+
+No PowerShell, defina as mesmas variáveis com `$env:LANGFUSE_PUBLIC_KEY`, `$env:LANGFUSE_SECRET_KEY` e, se necessário, `$env:LANGFUSE_BASE_URL`; depois rode o script. Ele confirma autenticação e envia o span `rag.langfuse_smoke`, que deve aparecer no projeto Langfuse.
+
+A integração do RAG envia apenas metadados operacionais: ID da requisição, impressão digital do ID da sessão, tamanho da pergunta, duração, quantidade de páginas recuperadas e resultado. Texto da pergunta, resposta e conteúdo do PDF não são enviados por esse trace.
 
 ## Iniciar em dois terminais
 
