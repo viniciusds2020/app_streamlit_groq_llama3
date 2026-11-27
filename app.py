@@ -1,19 +1,25 @@
+"""Streamlit presentation layer. RAG execution lives in the FastAPI backend."""
 import hashlib
 import logging
-import uuid
-import streamlit as st
-from langchain.chains import ConversationalRetrievalChain
 
-from chat_state import initialize_chat_state
-from ingestion import load_pdf, validate_pdf_bytes, PDFValidationError
-from retrieval import create_vector_store
-from llm import load_llm
+import streamlit as st
+
+from api_client import RAGAPIError, ask, create_session, reset, upload_pdf
 from styles import CUSTOM_CSS
 
 logger = logging.getLogger(__name__)
 
 st.set_page_config(page_title="Assistente de documentos", page_icon="💬", layout="centered")
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+
+
+def clear_conversation():
+    session_id = st.session_state.pop("api_session_id", None)
+    if session_id:
+        reset(session_id)
+    st.session_state.pop("indexed_document", None)
+    st.session_state["history"] = []
+
 
 with st.sidebar:
     st.markdown('<div class="sidebar-brand">💬 Assistente IA</div>', unsafe_allow_html=True)
@@ -22,11 +28,7 @@ with st.sidebar:
     if uploaded_file is not None:
         st.markdown('<span class="status-pill">📄 Documento carregado</span>', unsafe_allow_html=True)
     if st.session_state.get("history"):
-        st.button(
-            "🗑️ Nova conversa",
-            use_container_width=True,
-            on_click=lambda: st.session_state.update(history=[]),
-        )
+        st.button("🗑️ Nova conversa", use_container_width=True, on_click=clear_conversation)
 
 st.markdown(
     """
@@ -42,6 +44,9 @@ st.markdown(
 )
 
 if uploaded_file is None:
+    # No active document should remain reachable through the UI.
+    if st.session_state.get("api_session_id"):
+        clear_conversation()
     st.markdown(
         """
         <div class="empty-state">
@@ -54,22 +59,17 @@ if uploaded_file is None:
     )
 else:
     try:
-        # Validate before indexing or building a chain. No provider exception or
-        # document content is shown in the interface or application logs.
-        pdf_bytes = validate_pdf_bytes(uploaded_file.getvalue())
-        document_id = hashlib.sha256(pdf_bytes).hexdigest()
-        initialize_chat_state(document_id)
-        if st.session_state.get("indexed_document") != document_id:
+        pdf_bytes = uploaded_file.getvalue()
+        fingerprint = hashlib.sha256(pdf_bytes).hexdigest()
+        if st.session_state.get("indexed_document") != fingerprint:
+            clear_conversation()
             with st.spinner("Processando PDF..."):
-                documents = load_pdf(uploaded_file)
-                st.session_state["vector_store"] = create_vector_store(documents)
-                st.session_state["indexed_document"] = document_id
-        chain = ConversationalRetrievalChain.from_llm(
-            llm=load_llm(),
-            retriever=st.session_state["vector_store"].as_retriever(),
-            return_source_documents=True,
-        )
-        for question, answer in st.session_state["history"]:
+                session_id = create_session()
+                st.session_state["api_session_id"] = session_id
+                upload_pdf(session_id, pdf_bytes, uploaded_file.name)
+                st.session_state["indexed_document"] = fingerprint
+
+        for question, answer in st.session_state.get("history", []):
             with st.chat_message("user", avatar="🧑"):
                 st.markdown(question)
             with st.chat_message("assistant", avatar="🤖"):
@@ -78,24 +78,15 @@ else:
         question = st.chat_input("Pergunte algo sobre o documento...")
         if question and question.strip():
             with st.spinner("Consultando documento..."):
-                result = chain.invoke({
-                    "question": question,
-                    "chat_history": st.session_state["history"],
-                })
+                result = ask(st.session_state["api_session_id"], question.strip())
             answer = result["answer"]
-            sources = sorted({
-                str(doc.metadata["page"] + 1)
-                for doc in result.get("source_documents", [])
-                if isinstance(doc.metadata.get("page"), int)
-            }, key=int)
-            if sources:
-                answer += "\n\nPáginas recuperadas: " + ", ".join(sources)
-            st.session_state["history"].append((question, answer))
+            pages = result.get("pages", [])
+            if pages:
+                answer += "\n\nPáginas recuperadas: " + ", ".join(map(str, pages))
+            st.session_state.setdefault("history", []).append((question.strip(), answer))
             st.rerun()
-    except PDFValidationError as exc:
-        st.error(str(exc))  # Only controlled, explicitly safe messages.
+    except RAGAPIError as exc:
+        st.error(str(exc))
     except Exception as exc:
-        incident_id = uuid.uuid4().hex[:12]
-        logger.error("RAG request failed: incident=%s exception_type=%s",
-                     incident_id, type(exc).__name__)
-        st.error(f"Não foi possível concluir a solicitação. Tente novamente. Referência: {incident_id}")
+        logger.error("Streamlit API client failure exception_type=%s", type(exc).__name__)
+        st.error("Não foi possível concluir a solicitação. Verifique o serviço RAG.")
