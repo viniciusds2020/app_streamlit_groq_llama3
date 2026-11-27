@@ -5,7 +5,6 @@ for a public-facing or multi-worker deployment without proper authentication,
 authorization, distributed storage, and rate limiting.
 """
 import hashlib
-import logging
 import os
 import secrets
 import threading
@@ -16,11 +15,9 @@ from dataclasses import dataclass, field
 from langchain.chains import ConversationalRetrievalChain
 
 from ingestion import load_pdf
+from llm import load_llm
 from observability import trace_span
 from retrieval import create_vector_store
-from llm import load_llm
-
-log = logging.getLogger(__name__)
 
 
 class SessionNotFound(Exception):
@@ -100,7 +97,7 @@ class RAGService:
             del self._sessions[token]
 
     def upload(self, token, data):
-        """Validate, extract, index, and atomically replace a session's document."""
+        """Validate, extract, index, and replace a session's document."""
         session = self._get(token)
         with self._operation_slot():
             with session.lock:
@@ -128,11 +125,6 @@ class RAGService:
             with session.lock:
                 if session.vector_store is None:
                     raise DocumentNotIndexed()
-                chain = ConversationalRetrievalChain.from_llm(
-                    llm=load_llm(),
-                    retriever=session.vector_store.as_retriever(),
-                    return_source_documents=True,
-                )
                 trace_metadata = {
                     "request_id": request_id,
                     "session_fingerprint": hashlib.sha256(token.encode("utf-8")).hexdigest()[:16],
@@ -140,23 +132,28 @@ class RAGService:
                 }
                 started = time.monotonic()
                 with trace_span("rag.answer", metadata=trace_metadata) as span:
+                    chain = ConversationalRetrievalChain.from_llm(
+                        llm=load_llm(),
+                        retriever=session.vector_store.as_retriever(),
+                        return_source_documents=True,
+                    )
                     result = chain.invoke({
                         "question": question,
                         "chat_history": list(session.history),
                     })
-                answer = str(result["answer"])
-                pages = sorted({
-                    doc.metadata["page"] + 1
-                    for doc in result.get("source_documents", [])
-                    if isinstance(doc.metadata.get("page"), int) and doc.metadata["page"] >= 0
-                })
-                session.history.append((question, answer))
-                if span is not None:
-                    span.update(metadata={
-                        "duration_ms": round((time.monotonic() - started) * 1000),
-                        "retrieved_page_count": len(pages),
-                        "outcome": "success",
+                    answer = str(result["answer"])
+                    pages = sorted({
+                        doc.metadata["page"] + 1
+                        for doc in result.get("source_documents", [])
+                        if isinstance(doc.metadata.get("page"), int) and doc.metadata["page"] >= 0
                     })
+                    if span is not None:
+                        span.update(metadata={
+                            "duration_ms": round((time.monotonic() - started) * 1000),
+                            "retrieved_page_count": len(pages),
+                            "outcome": "success",
+                        })
+                session.history.append((question, answer))
                 return {
                     "answer": answer,
                     "pages": pages,
