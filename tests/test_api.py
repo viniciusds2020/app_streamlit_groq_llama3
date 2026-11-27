@@ -1,5 +1,6 @@
-"""FastAPI contract tests with deterministic fake retrieval and no Groq secrets."""
+"""FastAPI contract tests with deterministic fake retrieval and no provider secrets."""
 import io
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -21,7 +22,11 @@ def make_pdf(pages=1):
 
 @pytest.fixture
 def client(monkeypatch):
-    api.service = rag_service.RAGService(ttl_seconds=3600, max_sessions=10)
+    api.service = rag_service.RAGService(
+        ttl_seconds=3600,
+        max_sessions=10,
+        max_active_operations=10,
+    )
 
     def fake_load_pdf(upload):
         return [SimpleNamespace(page_content=str(len(upload.getvalue())), metadata={"page": 0})]
@@ -56,6 +61,7 @@ def client(monkeypatch):
 def new_session(client):
     response = client.post("/api/v1/sessions")
     assert response.status_code == 201
+    assert response.headers["x-request-id"] == response.json()["request_id"]
     return response.json()["session_id"]
 
 
@@ -72,9 +78,10 @@ def ask(client, session, question="Qual conteúdo?"):
     )
 
 
-def test_health(client):
-    assert client.get("/health/live").json()["status"] == "ok"
-    assert client.get("/health/ready").json()["status"] == "ready"
+def test_health_and_request_id(client):
+    result = client.get("/health/live")
+    assert result.json()["status"] == "ok"
+    assert result.headers["x-request-id"]
 
 
 def test_requires_index_before_answer(client):
@@ -82,18 +89,21 @@ def test_requires_index_before_answer(client):
     result = ask(client, session)
     assert result.status_code == 409
     assert result.json()["detail"]["code"] == "DOCUMENT_NOT_INDEXED"
+    assert result.json()["detail"]["request_id"] == result.headers["x-request-id"]
 
 
 def test_upload_query_and_isolate_two_sessions(client):
     first, second = new_session(client), new_session(client)
-    assert upload(client, first, make_pdf(1)).status_code == 201
-    assert upload(client, second, make_pdf(2)).status_code == 201
+    uploaded_a, uploaded_b = upload(client, first, make_pdf(1)), upload(client, second, make_pdf(2))
+    assert uploaded_a.status_code == uploaded_b.status_code == 201
+    assert uploaded_a.json()["request_id"] == uploaded_a.headers["x-request-id"]
     result_a = ask(client, first)
     result_b = ask(client, second)
     assert result_a.status_code == 200
     assert result_b.status_code == 200
     assert result_a.json()["answer"] != result_b.json()["answer"]
     assert result_a.json()["pages"] == [1]
+    assert result_a.json()["request_id"] == result_a.headers["x-request-id"]
 
 
 def test_reupload_invalidates_previous_index_and_history(client):
@@ -103,13 +113,16 @@ def test_reupload_invalidates_previous_index_and_history(client):
     assert len(api.service._get(session).history) == 1
     invalid = upload(client, session, b"not a pdf")
     assert invalid.status_code == 422
+    assert invalid.json()["detail"]["request_id"] == invalid.headers["x-request-id"]
     assert api.service._get(session).history == []
     assert ask(client, session).status_code == 409
 
 
 def test_deleted_session_is_unavailable(client):
     session = new_session(client)
-    assert client.delete(f"/api/v1/sessions/{session}").status_code == 204
+    deleted = client.delete(f"/api/v1/sessions/{session}")
+    assert deleted.status_code == 204
+    assert deleted.headers["x-request-id"]
     assert ask(client, session).status_code == 404
 
 
@@ -118,6 +131,19 @@ def test_oversized_upload_rejected(client, monkeypatch):
     monkeypatch.setenv("RAG_MAX_PDF_BYTES", "5")
     result = upload(client, session, b"%PDF-too-large")
     assert result.status_code == 413
+    assert result.json()["detail"]["request_id"] == result.headers["x-request-id"]
+
+
+def test_content_length_limit_rejects_before_multipart_parsing(client, monkeypatch):
+    session = new_session(client)
+    monkeypatch.setenv("RAG_MAX_PDF_BYTES", "5")
+    result = client.post(
+        f"/api/v1/sessions/{session}/documents",
+        headers={"content-length": "70000"},
+        files={"file": ("test.pdf", make_pdf(), "application/pdf")},
+    )
+    assert result.status_code == 413
+    assert result.json()["detail"]["code"] == "PDF_TOO_LARGE"
 
 
 def test_provider_error_does_not_leak(client, monkeypatch):
@@ -133,9 +159,54 @@ def test_provider_error_does_not_leak(client, monkeypatch):
     result = ask(client, session)
     assert result.status_code == 503
     assert "SECRET" not in result.text
-    assert result.json()["detail"]["request_id"]
+    assert result.json()["detail"]["request_id"] == result.headers["x-request-id"]
+
+
+def test_service_busy_returns_safe_error(client):
+    api.service = rag_service.RAGService(
+        ttl_seconds=3600,
+        max_sessions=10,
+        max_active_operations=1,
+    )
+    session = new_session(client)
+    api.service._operation_slots.acquire(blocking=False)
+    try:
+        result = ask(client, session)
+    finally:
+        api.service._operation_slots.release()
+    assert result.status_code == 503
+    assert result.json()["detail"]["code"] == "SERVICE_BUSY"
+    assert result.json()["detail"]["request_id"] == result.headers["x-request-id"]
+
+
+def test_langfuse_trace_metadata_excludes_question_and_answer(client, monkeypatch):
+    session = new_session(client)
+    assert upload(client, session, make_pdf()).status_code == 201
+    captured = {}
+
+    class FakeSpan:
+        def update(self, **kwargs):
+            captured["update"] = kwargs
+
+    @contextmanager
+    def fake_trace_span(name, *, metadata=None):
+        captured["name"] = name
+        captured["metadata"] = metadata
+        yield FakeSpan()
+
+    monkeypatch.setattr(rag_service, "trace_span", fake_trace_span)
+    result = ask(client, session, "pergunta confidencial")
+    assert result.status_code == 200
+    assert captured["name"] == "rag.answer"
+    assert captured["metadata"]["request_id"] == result.headers["x-request-id"]
+    assert captured["metadata"]["question_length"] == len("pergunta confidencial")
+    assert "question" not in captured["metadata"]
+    assert "answer" not in captured["metadata"]
+    assert captured["update"]["metadata"]["outcome"] == "success"
 
 
 def test_blank_question_is_rejected(client):
     session = new_session(client)
-    assert ask(client, session, "   ").status_code == 422
+    result = ask(client, session, "   ")
+    assert result.status_code == 422
+    assert result.json()["detail"]["request_id"] == result.headers["x-request-id"]
