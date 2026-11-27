@@ -83,12 +83,13 @@ class PersistentQdrantStore(VectorStore):
         embedding,
         metadatas=None,
         *,
-        collection_name,
+        collection_name=None,
         client=None,
         ids=None,
         **kwargs,
     ):
         """Create a store and index texts in the requested Qdrant collection."""
+        collection_name = collection_name or f"{COLLECTION_PREFIX}{uuid.uuid4().hex}"
         qdrant_client = client or _load_qdrant_client()
         if qdrant_client.collection_exists(collection_name):
             qdrant_client.delete_collection(collection_name)
