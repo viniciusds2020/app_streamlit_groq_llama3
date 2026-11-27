@@ -1,6 +1,6 @@
 # FastAPI RAG — execução local
 
-Esta branch separa a interface Streamlit da orquestração RAG. O backend mantém FAISS/FastEmbed, Groq e validação dos PDFs; a UI usa HTTP. **Somente para localhost**: tokens de sessão são credenciais bearer, o índice fica em memória de um processo e não há autenticação/autorização de usuários. Nunca exponha a API na internet assim.
+Esta branch separa a interface Streamlit da orquestração RAG. O backend usa Qdrant para vetores, DuckDB para metadados e histórico, FastEmbed para embeddings e Groq para geração; a UI usa HTTP. **Somente para localhost**: tokens de sessão são credenciais bearer e não há autenticação/autorização de usuários. Nunca exponha a API na internet assim.
 
 ## Preparação
 
@@ -14,7 +14,7 @@ export GROQ_API_KEY="sua_chave"
 export GROQ_MODEL="modelo-disponivel-na-sua-conta"
 ```
 
-Em Windows PowerShell: `.venv\Scripts\Activate.ps1` e `$env:GROQ_API_KEY="..."`, `$env:GROQ_MODEL="..."`.
+Em Windows PowerShell: `.venv\Scripts\Activate.ps1`; configure `$env:GROQ_API_KEY`, `$env:GROQ_MODEL` e, se usar Qdrant remoto, `$env:QDRANT_URL` e `$env:QDRANT_API_KEY`.
 
 Langfuse é opcional. Sem as duas chaves, o RAG não cria traces e continua funcionando:
 
@@ -51,6 +51,12 @@ streamlit run app.py
 
 Documentação interativa do backend: http://127.0.0.1:8000/docs. Para outra porta, configure `RAG_API_URL` no processo Streamlit.
 
+## Persistência Qdrant e DuckDB
+
+Por padrão, o Qdrant local mantém vetores em `data/qdrant` e o DuckDB mantém sessões e histórico em `data/rag.duckdb`. Essas pastas são locais e ignoradas pelo Git. PDFs e trechos extraídos ficam no Qdrant em disco; proteja o diretório como dados do usuário e faça backup se precisar manter os documentos.
+
+Para usar um servidor Qdrant, defina `QDRANT_URL` e, quando necessário, `QDRANT_API_KEY`; `QDRANT_PATH` é usado quando `QDRANT_URL` está vazio. Configure `RAG_METADATA_DB` para mover o arquivo DuckDB. IDs de sessão são armazenados como hash. O backend continua single-process; não use o modo local com múltiplos workers.
+
 ## Endpoints
 
 - `POST /api/v1/sessions`: cria sessão local de acesso por token.
@@ -63,7 +69,7 @@ Todas as respostas HTTP incluem o cabeçalho `X-Request-ID`; respostas de sucess
 
 ## Limites e observabilidade
 
-PDFs devem respeitar as restrições preexistentes de tamanho, páginas e texto. O arquivo é lido com limite de bytes, e requisições de upload com `Content-Length` acima do limite mais a margem multipart são recusadas antes do parsing. Sessões expiram após inatividade (padrão: 3600 s); limite padrão de 100 sessões no processo. Operações pesadas simultâneas são limitadas a 2 por processo por padrão; configure `RAG_MAX_CONCURRENT_OPERATIONS` para ajustar. Reiniciar o backend apaga índices e conversas.
+PDFs devem respeitar as restrições preexistentes de tamanho, páginas e texto. O arquivo é lido com limite de bytes, e requisições de upload com `Content-Length` acima do limite mais a margem multipart são recusadas antes do parsing. Sessões expiram após inatividade (padrão: 3600 s); limite padrão de 100 sessões no processo. Operações pesadas simultâneas são limitadas a 2 por processo por padrão; configure `RAG_MAX_CONCURRENT_OPERATIONS` para ajustar. Os vetores, metadados da sessão e histórico sobrevivem ao reinício do backend. A expiração de sessão remove também a coleção Qdrant associada.
 
 Com Langfuse configurado, cada resposta gera um span `rag.answer` com duração, páginas recuperadas e erros sanitizados. Não há tracing de ingestão, conteúdo ou custo/token nesta etapa. A resposta apresenta páginas recuperadas, não citações verificadas em nível de afirmação.
 
@@ -73,8 +79,8 @@ Com Langfuse configurado, cada resposta gera um span `rag.answer` com duração,
 python -m pytest -q
 ```
 
-O CI usa um modelo simulado para não precisar da chave Groq ou das chaves Langfuse. Para validar ponta a ponta com a Groq real, rode ambos os processos e teste: (1) carregar PDF, (2) perguntar, (3) trocar PDF, (4) reiniciar conversa, (5) rejeitar PDF inválido.
+O CI usa um modelo simulado, Qdrant em memória e DuckDB temporário; não precisa de chave Groq nem de chaves Langfuse. Para validar ponta a ponta com a Groq real, rode ambos os processos e teste: (1) carregar PDF, (2) perguntar, (3) trocar PDF, (4) reiniciar conversa, (5) rejeitar PDF inválido.
 
 ## Limitações arquiteturais
 
-O backend é local, single-process, sem armazenamento persistente ou autenticação. O limite via `Content-Length` não substitui um limite de corpo no proxy/servidor, especialmente para uploads sem esse cabeçalho. Para escala, serão necessários mecanismos de identidade e autorização, limite de taxa, processamento isolado/assíncrono, store compartilhado e observabilidade operacional. Qdrant, DuckDB e Langfuse ficam fora do núcleo de armazenamento desta mudança.
+O backend é local, single-process, sem armazenamento persistente ou autenticação. O limite via `Content-Length` não substitui um limite de corpo no proxy/servidor, especialmente para uploads sem esse cabeçalho. Para escala, serão necessários mecanismos de identidade e autorização, limite de taxa e processamento isolado/assíncrono. O modo Qdrant local e o arquivo DuckDB não são criptografados automaticamente.
