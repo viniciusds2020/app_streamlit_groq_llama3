@@ -163,13 +163,16 @@ def test_provider_error_does_not_leak(client, monkeypatch):
 
 
 def test_service_busy_returns_safe_error(client):
+    api.service = rag_service.RAGService(
+        ttl_seconds=3600,
+        max_sessions=10,
+        max_active_operations=1,
+    )
     session = new_session(client)
-    api.service._operation_slots.acquire(blocking=False)
     api.service._operation_slots.acquire(blocking=False)
     try:
         result = ask(client, session)
     finally:
-        api.service._operation_slots.release()
         api.service._operation_slots.release()
     assert result.status_code == 503
     assert result.json()["detail"]["code"] == "SERVICE_BUSY"
