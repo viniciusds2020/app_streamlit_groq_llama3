@@ -76,6 +76,26 @@ class PersistentQdrantStore(VectorStore):
         )
         return identifiers
 
+    @classmethod
+    def from_texts(
+        cls,
+        texts,
+        embedding,
+        metadatas=None,
+        *,
+        collection_name,
+        client=None,
+        ids=None,
+        **kwargs,
+    ):
+        """Create a store and index texts in the requested Qdrant collection."""
+        qdrant_client = client or _load_qdrant_client()
+        if qdrant_client.collection_exists(collection_name):
+            qdrant_client.delete_collection(collection_name)
+        store = cls(qdrant_client, collection_name, embeddings=embedding)
+        store.add_texts(texts, metadatas=metadatas, ids=ids, **kwargs)
+        return store
+
     def similarity_search(self, query, k=4, filter=None, **kwargs):
         if not self.client.collection_exists(self.collection_name):
             return []
@@ -108,7 +128,12 @@ def create_vector_store(documents, collection_name):
     if client.collection_exists(collection_name):
         client.delete_collection(collection_name)
     store = PersistentQdrantStore(client, collection_name)
-    store.add_documents(documents)
+    try:
+        store.add_documents(documents)
+    except Exception:
+        if client.collection_exists(collection_name):
+            client.delete_collection(collection_name)
+        raise
     return store
 
 
