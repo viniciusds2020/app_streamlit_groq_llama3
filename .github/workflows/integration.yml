@@ -25,5 +25,6 @@ jobs:
           python -c "from langchain_community.document_loaders import PyPDFLoader"
           python -c "from langchain_community.vectorstores import FAISS"
           python -c "from langchain_groq import ChatGroq"
+          python -c "from langfuse import get_client"
       - name: Run unit and mocked integration tests
         run: python -m pytest -q
