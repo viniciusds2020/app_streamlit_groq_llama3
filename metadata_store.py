@@ -94,14 +94,14 @@ class MetadataStore:
 
     def delete_session(self, session_key):
         with self._lock:
-            self._connection.execute(
-                "DELETE FROM rag_sessions WHERE session_key = ? RETURNING collection_name",
-                [session_key],
-            )
             row = self._connection.execute(
                 "SELECT collection_name FROM rag_sessions WHERE session_key = ?",
                 [session_key],
             ).fetchone()
+            self._connection.execute(
+                "DELETE FROM rag_sessions WHERE session_key = ?",
+                [session_key],
+            )
         return None if row is None else row[0]
 
     def delete_expired(self, cutoff):
