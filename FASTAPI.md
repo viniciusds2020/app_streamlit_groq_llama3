@@ -53,7 +53,7 @@ Documentação interativa do backend: http://127.0.0.1:8000/docs. Para outra por
 
 ## Persistência Qdrant e DuckDB
 
-Por padrão, o Qdrant local mantém vetores em `data/qdrant` e o DuckDB mantém sessões e histórico em `data/rag.duckdb`. Essas pastas são locais e ignoradas pelo Git. PDFs e trechos extraídos ficam no Qdrant em disco; proteja o diretório como dados do usuário e faça backup se precisar manter os documentos.
+Por padrão, o Qdrant local mantém vetores em `data/qdrant` e o DuckDB mantém sessões e histórico em `data/rag.duckdb`. Essas pastas são locais e ignoradas pelo Git. O Qdrant em disco guarda os trechos de texto extraídos e seus vetores, não o PDF original; o DuckDB guarda o histórico de perguntas e respostas. Proteja ambos como dados do usuário e faça backup se precisar manter o índice e as conversas.
 
 Para usar um servidor Qdrant, defina `QDRANT_URL` e, quando necessário, `QDRANT_API_KEY`; `QDRANT_PATH` é usado quando `QDRANT_URL` está vazio. Configure `RAG_METADATA_DB` para mover o arquivo DuckDB. IDs de sessão são armazenados como hash. O backend continua single-process; não use o modo local com múltiplos workers.
 
