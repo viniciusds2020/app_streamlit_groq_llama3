@@ -37,13 +37,13 @@ class PersistentQdrantStore(VectorStore):
     def __init__(self, client, collection_name, embeddings=None):
         self.client = client
         self.collection_name = collection_name
-        self.embeddings = embeddings or _load_embeddings()
+        self._embeddings = embeddings or _load_embeddings()
 
     def add_texts(self, texts: Iterable[str], metadatas=None, ids=None, **kwargs):
         texts = list(texts)
         if not texts:
             return []
-        vectors = self.embeddings.embed_documents(texts)
+        vectors = self._embeddings.embed_documents(texts)
         if not self.client.collection_exists(self.collection_name):
             self.client.create_collection(
                 collection_name=self.collection_name,
@@ -81,7 +81,7 @@ class PersistentQdrantStore(VectorStore):
             return []
         hits = self.client.query_points(
             collection_name=self.collection_name,
-            query=self.embeddings.embed_query(query),
+            query=self._embeddings.embed_query(query),
             query_filter=filter,
             limit=k,
             with_payload=True,
